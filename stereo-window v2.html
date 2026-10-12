@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Stereo Window</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap">
+<style>
+/* Layout: full-bleed WebGL stage, thin HUD bars top and bottom, settings sheet slides from the right */
+:root{
+  --bg:#07090b; --ink:#e8ecef; --muted:#8c979f; --glass:rgba(12,16,19,.72);
+  --line:rgba(232,236,239,.14); --accent:#ffb347; --red:#ff4d4d; --cyan:#3fd8e6;
+  --f-ui:"IBM Plex Sans Condensed",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 var(--f-ui);overflow:hidden;
+  -webkit-tap-highlight-color:transparent;touch-action:none;user-select:none}
+[hidden]{display:none!important}
+#gl{position:fixed;inset:0;width:100%;height:100%;display:block}
+video.hiddenvid{position:fixed;width:2px;height:2px;opacity:0;pointer-events:none;left:0;top:0}
+
+.hud{position:fixed;inset:0;pointer-events:none;transition:opacity .35s}
+.hud.faded{opacity:0}
+.hud.faded *{pointer-events:none!important}
+.bar{position:absolute;left:0;right:0;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px max(14px,env(safe-area-inset-right)) 10px max(14px,env(safe-area-inset-left));flex-wrap:wrap}
+.bar.top{top:0;padding-top:calc(10px + env(safe-area-inset-top,0px));background:linear-gradient(var(--glass),transparent)}
+.bar.bottom{bottom:0;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));background:linear-gradient(transparent,var(--glass))}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:13px}
+.dots{display:inline-flex}
+.dots i{width:11px;height:11px;border-radius:50%;display:block;mix-blend-mode:screen}
+.dots i:first-child{background:var(--red)} .dots i:last-child{background:var(--cyan);margin-left:-5px}
+.actions{display:flex;gap:6px;flex-wrap:wrap}
+button,.filebtn{pointer-events:auto;font:500 13px var(--f-ui);letter-spacing:.02em;color:var(--ink);background:var(--glass);
+  border:1px solid var(--line);border-radius:999px;padding:8px 14px;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+button:hover,.filebtn:hover{border-color:rgba(232,236,239,.35)}
+button:focus-visible,.filebtn:focus-within,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);color:#1a1205;border-color:transparent;font-weight:600}
+button.on{border-color:var(--accent);color:var(--accent)}
+.chip{pointer-events:auto;font:12px var(--f-mono);color:var(--muted);background:var(--glass);border:1px solid var(--line);
+  border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px;max-width:100%}
+.chip b{font-weight:500;color:var(--ink)}
+.led{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.led.ok{background:#4ade80;box-shadow:0 0 8px #4ade80}.led.warn{background:var(--accent)}.led.err{background:var(--red)}
+.readout{font:12px var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums;display:flex;gap:14px}
+.readout b{color:var(--ink);font-weight:500}
+
+.panel{position:fixed;top:0;right:0;bottom:0;width:min(340px,92vw);background:rgba(10,13,15,.94);border-left:1px solid var(--line);
+  padding:calc(14px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px));overflow-y:auto;
+  touch-action:pan-y;user-select:auto;display:flex;flex-direction:column;gap:16px;z-index:5}
+.panel h2{margin:0;font-size:13px;letter-spacing:.08em;text-transform:uppercase;display:flex;justify-content:space-between;align-items:center}
+.group{display:flex;flex-direction:column;gap:10px;padding-top:12px;border-top:1px solid var(--line)}
+.group>.lab{font:11px var(--f-mono);color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.field{display:flex;flex-direction:column;gap:4px}
+.field .top{display:flex;justify-content:space-between;font-size:13px}
+.field .top output{font:12px var(--f-mono);color:var(--accent);font-variant-numeric:tabular-nums}
+.field small{color:var(--muted);font-size:12px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+select{font:13px var(--f-ui);color:var(--ink);background:#141a1e;border:1px solid var(--line);border-radius:6px;padding:7px 8px;width:100%}
+label.check{display:flex;align-items:center;gap:8px;font-size:13px}
+input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px}
+.filebtn input{display:none}
+.note{font-size:12px;color:var(--muted);line-height:1.5}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:4;touch-action:none}
+.gate{position:fixed;inset:0;display:grid;place-items:center;padding:16px;background:rgba(4,6,8,.55);z-index:8}
+.gatecard{max-width:380px;width:100%;background:rgba(12,16,19,.95);border:1px solid var(--line);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:12px}
+.gatecard h1{margin:0;font-size:20px;font-weight:600;text-wrap:balance}
+.gatecard p{margin:0;color:var(--muted);line-height:1.5}
+.gatecard .note:empty{display:none}
+.gatecard .note{color:var(--accent)}
+.err{position:fixed;left:16px;right:16px;top:50%;transform:translateY(-50%);background:var(--glass);border:1px solid var(--red);
+  border-radius:8px;padding:16px;font-size:14px;max-width:520px;margin:auto;z-index:9}
+@media (prefers-reduced-motion:reduce){.hud{transition:none}}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<video id="vid" class="hiddenvid" playsinline loop muted></video>
+<video id="cam" class="hiddenvid" playsinline muted></video>
+
+<div class="hud" id="hud">
+  <div class="bar top">
+    <div class="brand"><span class="dots"><i></i><i></i></span>Stereo Window</div>
+    <div class="actions">
+      <button id="bTrack" class="primary">Track my face</button>
+      <button id="bFs">Full screen</button>
+      <button id="bPanel" aria-controls="panel">Settings</button>
+    </div>
+  </div>
+  <div class="bar bottom">
+    <div class="chip"><span class="led" id="led"></span><span id="status">Demo scene · drag to look around</span></div>
+    <div class="readout"><span>dist <b id="rDist">—</b></span><span>angle <b id="rAng">0°</b></span><span>view <b id="rView">0.50</b></span></div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<div class="gate" id="gate" role="dialog" aria-labelledby="gateTitle">
+  <div class="gatecard">
+    <span class="dots"><i></i><i></i></span>
+    <h1 id="gateTitle">Use your front camera?</h1>
+    <p>Stereo Window watches where your eyes are to change the 3D viewpoint as you move. Video stays on your phone and is never uploaded.</p>
+    <p class="note" id="gateNote"></p>
+    <div class="row"><button class="primary" id="gAllow">Allow camera</button><button id="gSkip">Not now</button></div>
+  </div>
+</div>
+<aside class="panel" id="panel" hidden>
+  <h2>Settings <button id="bClose">Close</button></h2>
+
+  <div class="group">
+    <div class="lab">Video</div>
+    <div class="row">
+      <label class="filebtn">Load side-by-side video<input type="file" id="fVideo" accept="video/*"></label>
+      <button id="bDemo">Demo scene</button>
+    </div>
+    <div class="row"><button id="bPlay">Pause</button><button id="bSound">Sound off</button></div>
+    <div class="field"><div class="top"><span>Layout</span></div>
+      <select id="sLayout"><option value="full">Full SBS (each eye normal width)</option><option value="half">Half SBS (each eye squeezed)</option></select></div>
+    <label class="check"><input type="checkbox" id="cSwap">Swap left and right eyes</label>
+    <div class="field"><div class="top"><span>Screen fit</span></div>
+      <select id="sFit"><option value="fill">Fill screen</option><option value="fit">Show whole frame</option></select></div>
+  </div>
+
+  <div class="group">
+    <div class="lab">Merge</div>
+    <div class="field"><div class="top"><span>Mode</span></div>
+      <select id="sMode"><option value="0">Depth blend (3D)</option><option value="1">Crossfade</option><option value="2">Left eye only</option><option value="3">Depth map</option></select>
+      <small>Depth blend matches the two eyes, builds a depth map, and renders a new viewpoint between them.</small></div>
+    <div class="field"><div class="top"><span>Parallax strength</span><output id="oPar"></output></div><input type="range" id="rPar" min="0" max="3" step="0.05"></div>
+    <div class="field"><div class="top"><span>Vertical parallax</span><output id="oVert"></output></div><input type="range" id="rVert" min="0" max="2" step="0.05"></div>
+    <div class="field"><div class="top"><span>Screen-plane depth</span><output id="oFocus"></output></div><input type="range" id="rFocus" min="0" max="1" step="0.01">
+      <small>Things at this depth stay still. Nearer things slide one way, farther things the other.</small></div>
+    <div class="field"><div class="top"><span>Max disparity</span><output id="oDisp"></output></div><input type="range" id="rDisp" min="2" max="15" step="0.5">
+      <small>Biggest left/right offset in the video, as % of one eye's width. Check with Depth map mode.</small></div>
+  </div>
+
+  <div class="group">
+    <div class="lab">Head tracking</div>
+    <div class="field"><div class="top"><span>Distance zoom</span><output id="oZoom"></output></div><input type="range" id="rZoom" min="-1" max="1" step="0.05">
+      <small>Positive: lean in to see more, like a real window. Negative: lean in to magnify.</small></div>
+    <label class="check"><input type="checkbox" id="cInv">Reverse direction</label>
+    <div class="row"><button id="bCal">I'm 30 cm away</button><button id="bCentre">Set centre here</button></div>
+    <p class="note">Hold the phone at a measured 30 cm from your eyes and tap "I'm 30 cm away" to calibrate distance. Then hold it where you normally will and tap "Set centre here".</p>
+  </div>
+</aside>
+
+<div class="err" id="err" hidden></div>
+
+<script type="module">
+const $ = s => document.getElementById(s);
+const canvas = $('gl'), vid = $('vid'), cam = $('cam');
+const gl = canvas.getContext('webgl2', { antialias: false, premultipliedAlpha: false, preserveDrawingBuffer: false });
+function fail(msg){ const e=$('err'); e.textContent=msg; e.hidden=false; }
+if (!gl) { fail('This browser does not support WebGL2, which the 3D merge needs. Try Chrome on Android or Safari 15+ on iPhone.'); throw new Error('no webgl2'); }
+
+/* ---------- settings ---------- */
+const DEF = { par:1, vert:0.6, zoom:0.35, focus:0.3, disp:6, layout:'full', swap:false, fit:'fill', mode:0, inv:false, calK:1, refZ:300, ax0:0, ay0:0 };
+let S = { ...DEF };
+try { Object.assign(S, JSON.parse(localStorage.getItem('stereoWindow') || '{}')); } catch(e){}
+const save = () => { try { localStorage.setItem('stereoWindow', JSON.stringify(S)); } catch(e){} };
+
+const sliders = { par:['rPar','oPar',v=>v.toFixed(2)+'×'], vert:['rVert','oVert',v=>v.toFixed(2)+'×'], zoom:['rZoom','oZoom',v=>(v>0?'+':'')+v.toFixed(2)],
+  focus:['rFocus','oFocus',v=>Math.round(v*100)+'%'], disp:['rDisp','oDisp',v=>v.toFixed(1)+'%'] };
+for (const [k,[ri,oi,fmt]] of Object.entries(sliders)) {
+  const r=$(ri), o=$(oi); r.value=S[k]; o.textContent=fmt(+S[k]);
+  r.addEventListener('input',()=>{ S[k]=+r.value; o.textContent=fmt(S[k]); save(); });
+}
+$('sLayout').value=S.layout; $('sLayout').onchange=e=>{S.layout=e.target.value;save();};
+$('sFit').value=S.fit; $('sFit').onchange=e=>{S.fit=e.target.value;save();};
+$('sMode').value=String(S.mode); $('sMode').onchange=e=>{S.mode=+e.target.value;save();};
+$('cSwap').checked=S.swap; $('cSwap').onchange=e=>{S.swap=e.target.checked;save();};
+$('cInv').checked=S.inv; $('cInv').onchange=e=>{S.inv=e.target.checked;save();};
+
+/* ---------- GL setup ---------- */
+const VS = `#version 300 es
+out vec2 v;
+void main(){ vec2 p=vec2(gl_VertexID==1?3.:-1., gl_VertexID==2?3.:-1.); v=p*.5+.5; gl_Position=vec4(p,0.,1.); }`;
+const H = `#version 300 es
+precision highp float;
+in vec2 v; out vec4 o;
+`;
+// 1. Downsample both eyes to luminance: R = left, G = right
+const FS_LUM = H + `
+uniform sampler2D srcT; uniform float oL,oR; uniform vec2 q;
+float lum(vec3 c){ return dot(c,vec3(.299,.587,.114)); }
+float eye(vec2 u,float off){ u=clamp(u,0.,1.); return lum(texture(srcT,vec2(u.x*.5+off,u.y)).rgb); }
+void main(){
+  float l=0.,r=0.;
+  for(int i=0;i<4;i++){ vec2 d=vec2(i==0||i==2?-q.x:q.x, i<2?-q.y:q.y); l+=eye(v+d,oL); r+=eye(v+d,oR); }
+  o=vec4(l*.25,r*.25,0.,1.);
+}`;
+// 2. Block-match disparity (left-eye coordinates), zero-mean SAD + temporal prior
+const FS_DISP = H + `
+uniform sampler2D lumT, prevT; uniform vec2 px; uniform float dMin,dMax,lambda;
+const int N=40;
+void main(){
+  float L[9]; vec2 Q[9]; int k=0; float mL=0.;
+  for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++){ Q[k]=v+vec2(float(x),float(y))*px*2.; L[k]=texture(lumT,Q[k]).r; mL+=L[k]; k++; }
+  mL/=9.;
+  float prev=texture(prevT,v).r, best=1e9, bn=0.;
+  for(int i=0;i<N;i++){
+    float n=float(i)/float(N-1); float d=mix(dMin,dMax,n);
+    float R[9]; float mR=0.;
+    for(int j=0;j<9;j++){ R[j]=texture(lumT,Q[j]-vec2(d,0.)).g; mR+=R[j]; }
+    mR/=9.; float c=0.;
+    for(int j=0;j<9;j++) c+=abs((L[j]-mL)-(R[j]-mR));
+    c+=lambda*abs(n-prev);
+    if(c<best){ best=c; bn=n; }
+  }
+  o=vec4(bn,clamp(best*3.,0.,1.),0.,1.);
+}`;
+// 3. Edge-aware, confidence-weighted smoothing + temporal blend
+const FS_SMOOTH = H + `
+uniform sampler2D rawT, lumT, prevT; uniform vec2 px; uniform float k;
+void main(){
+  float c=texture(lumT,v).r, s=0., w=0.;
+  for(int y=-2;y<=2;y++) for(int x=-2;x<=2;x++){
+    vec2 q=v+vec2(float(x),float(y))*px*1.5; vec2 r=texture(rawT,q).rg;
+    float ww=exp(-abs(texture(lumT,q).r-c)*12.)*exp(-float(x*x+y*y)/4.)/(r.g+.04);
+    s+=r.r*ww; w+=ww;
+  }
+  float d=s/max(w,1e-5);
+  o=vec4(mix(texture(prevT,v).r,d,k),0.,0.,1.);
+}`;
+// 4. Synthesize the viewpoint
+const FS_OUT = H + `
+uniform sampler2D srcT, dispT; uniform float oL,oR,t,vy,d0n,dMin,dMax,mode; uniform vec2 scale;
+vec3 samp(vec2 u,float off){ if(u.y<0.||u.y>1.) return vec3(0.); return texture(srcT,vec2(clamp(u.x,.0005,.9995)*.5+off,u.y)).rgb; }
+float D(vec2 u){ return mix(dMin,dMax,texture(dispT,clamp(u,0.,1.)).r); }
+vec3 heat(float x){ return clamp(vec3(1.6*x-.3, 1.2-abs(2.*x-1.)*1.3, 1.4-2.*x),0.,1.); }
+void main(){
+  vec2 uv=(v-.5)*scale+.5;
+  if(uv.x<-.02||uv.x>1.02||uv.y<0.||uv.y>1.){ o=vec4(0.,0.,0.,1.); return; }
+  float d0=mix(dMin,dMax,d0n); vec3 col;
+  if(mode<.5){
+    float d=D(uv);
+    for(int i=0;i<2;i++){ float rel=d-d0; d=D(uv+vec2(t*rel,vy*rel)); }   // refine: look up depth in left-eye coords
+    float rel=d-d0;
+    vec2 uL=uv+vec2(t*rel,vy*rel), uR=uL-vec2(d,0.);
+    col=mix(samp(uL,oL),samp(uR,oR),clamp(t,0.,1.));
+  } else if(mode<1.5){
+    col=mix(samp(uv,oL),samp(uv,oR),clamp(t,0.,1.));
+  } else if(mode<2.5){
+    col=samp(uv,oL);
+  } else {
+    float n=texture(dispT,clamp(uv,0.,1.)).r; col=heat(n);
+    if(abs(n-d0n)<.008) col=vec3(1.);
+  }
+  o=vec4(col,1.);
+}`;
+
+function compile(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+function program(fs){
+  const p=gl.createProgram(); gl.attachShader(p,compile(gl.VERTEX_SHADER,VS)); gl.attachShader(p,compile(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u={}; const n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);
+  for(let i=0;i<n;i++){ const a=gl.getActiveUniform(p,i); u[a.name]=gl.getUniformLocation(p,a.name); }
+  return {p,u};
+}
+let P;
+try { P = { lum:program(FS_LUM), disp:program(FS_DISP), smooth:program(FS_SMOOTH), out:program(FS_OUT) }; }
+catch(e){ fail('Shader error: '+e.message); throw e; }
+gl.bindVertexArray(gl.createVertexArray());
+
+function makeTex(w,h){
+  const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  if(w) gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+  return t;
+}
+function makeTarget(w,h){ const tex=makeTex(w,h), fb=gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER,fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0); return {tex,fb,w,h}; }
+function drawTo(target, prog, tex, uni){
+  gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null);
+  gl.viewport(0,0, target?target.w:canvas.width, target?target.h:canvas.height);
+  gl.useProgram(prog.p);
+  let unit=0;
+  for(const [name,t] of Object.entries(tex)){ gl.activeTexture(gl.TEXTURE0+unit); gl.bindTexture(gl.TEXTURE_2D,t); gl.uniform1i(prog.u[name],unit++); }
+  for(const [name,val] of Object.entries(uni)){ const l=prog.u[name]; if(l==null) continue;
+    if(Array.isArray(val)) gl.uniform2f(l,val[0],val[1]); else gl.uniform1f(l,val); }
+  gl.drawArrays(gl.TRIANGLES,0,3);
+}
+
+const srcTex = makeTex();
+let T = null, eyeAspectNow = 0;
+function setupTargets(aspect){
+  const w=320, h=Math.max(90,Math.min(320,Math.round(w/aspect)));
+  if(T) for(const k of ['lum','raw','a','b']){ gl.deleteTexture(T[k].tex); gl.deleteFramebuffer(T[k].fb); }
+  T={ lum:makeTarget(w,h), raw:makeTarget(w,h), a:makeTarget(w,h), b:makeTarget(w,h), w, h };
+  eyeAspectNow=aspect;
+}
+
+/* ---------- demo stereo scene (drawn per eye with known disparities) ---------- */
+const demo=document.createElement('canvas'); demo.width=1280; demo.height=360;
+const dc=demo.getContext('2d');
+let seed=7; const rnd=()=>((seed=(seed*16807)%2147483647)/2147483647);
+function sprite(w,h,paint){ const c=document.createElement('canvas'); c.width=w; c.height=h; paint(c.getContext('2d'),w,h); return c; }
+const wall=sprite(780,440,(g,w,h)=>{
+  g.fillStyle='#0d1b24'; g.fillRect(0,0,w,h);
+  for(let i=0;i<900;i++){ const s=4+rnd()*26; g.fillStyle=`hsla(${190+rnd()*40},${30+rnd()*40}%,${12+rnd()*30}%,.9)`; g.fillRect(rnd()*w,rnd()*h,s,s*(.4+rnd())); }
+  g.strokeStyle='rgba(120,200,220,.18)'; g.lineWidth=1;
+  for(let x=0;x<w;x+=40){ g.beginPath(); g.moveTo(x,0); g.lineTo(x,h); g.stroke(); }
+  for(let y=0;y<h;y+=40){ g.beginPath(); g.moveTo(0,y); g.lineTo(w,y); g.stroke(); }
+});
+const pillar=hue=>sprite(70,300,(g,w,h)=>{
+  for(let y=0;y<h;y+=10){ g.fillStyle=`hsl(${hue},${40+rnd()*30}%,${25+rnd()*35}%)`; g.fillRect(0,y,w,10); }
+  for(let i=0;i<60;i++){ g.fillStyle=`rgba(255,255,255,${.1+rnd()*.4})`; g.fillRect(rnd()*w,rnd()*h,3+rnd()*6,3+rnd()*6); }
+});
+const pillars=[ {img:pillar(28),x:90,y:50,d:9}, {img:pillar(330),x:470,y:30,d:13} ];
+const card=sprite(130,130,(g,w,h)=>{ for(let y=0;y<h;y+=13) for(let x=0;x<w;x+=13){ g.fillStyle=((x+y)/13)%2?'#f2c14e':'#3a2a10'; g.fillRect(x,y,13,13); }
+  g.strokeStyle='#fff'; g.lineWidth=4; g.strokeRect(2,2,w-4,h-4); });
+const orb=sprite(150,150,(g,w,h)=>{
+  const gr=g.createRadialGradient(55,50,8,75,75,74); gr.addColorStop(0,'#fff'); gr.addColorStop(.35,'#ff7a59'); gr.addColorStop(1,'#5a1020');
+  g.fillStyle=gr; g.beginPath(); g.arc(75,75,72,0,7); g.fill();
+  g.save(); g.clip(); for(let i=0;i<70;i++){ g.fillStyle=`rgba(${rnd()<.5?0:255},${rnd()*120|0},40,.45)`; g.beginPath(); g.arc(rnd()*w,rnd()*h,2+rnd()*7,0,7); g.fill(); } g.restore();
+});
+function drawDemo(now){
+  const t=now/1000;
+  for(let eye=0;eye<2;eye++){
+    const s=eye===0?.5:-.5;
+    dc.save(); dc.beginPath(); dc.rect(eye*640,0,640,360); dc.clip(); dc.translate(eye*640,0);
+    dc.drawImage(wall,-70+s*2,-40);
+    for(const p of pillars) dc.drawImage(p.img,p.x+s*p.d,p.y);
+    const cd=17; dc.save(); dc.translate(300+s*cd,120+Math.sin(t*.7)*20); dc.rotate(t*.4); dc.drawImage(card,-65,-65); dc.restore();
+    const od=30, ox=330+Math.cos(t*.6)*170, oy=210+Math.sin(t*.9)*50;
+    dc.drawImage(orb,ox-75+s*od,oy-75);
+    dc.restore();
+  }
+}
+
+/* ---------- source handling ---------- */
+let source='demo', vidURL=null, lastVidT=-1;
+function eyeAspect(){
+  if(source==='demo') return 640/360;
+  const w=vid.videoWidth||16, h=vid.videoHeight||9;
+  return S.layout==='half' ? w/h : (w/2)/h;
+}
+$('fVideo').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f) return;
+  if(vidURL) URL.revokeObjectURL(vidURL);
+  vidURL=URL.createObjectURL(f); vid.src=vidURL; vid.muted=true; source='video'; lastVidT=-1;
+  vid.play().catch(()=>{}); $('bSound').textContent='Sound off'; $('bPlay').textContent='Pause';
+});
+$('bDemo').onclick=()=>{ source='demo'; vid.pause(); };
+$('bPlay').onclick=()=>{ if(source!=='video') return; if(vid.paused){ vid.play(); $('bPlay').textContent='Pause'; } else { vid.pause(); $('bPlay').textContent='Play'; } };
+$('bSound').onclick=()=>{ vid.muted=!vid.muted; $('bSound').textContent=vid.muted?'Sound off':'Sound on'; if(!vid.muted) vid.play().catch(()=>{}); };
+
+/* ---------- head tracking ---------- */
+const IPD=63, HFOV=65*Math.PI/180;
+const MP='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL='https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
+let detector=null, tracking=false, face=null, lastCamT=-1, trackState='off', wakeLock=null;
+
+// Ask the browser for the front camera; this is what shows the system Allow / Block prompt.
+function getCamera(){
+  const c={video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false};
+  if(navigator.mediaDevices?.getUserMedia) return navigator.mediaDevices.getUserMedia(c);
+  const legacy=navigator.getUserMedia||navigator.webkitGetUserMedia||navigator.mozGetUserMedia;
+  if(legacy) return new Promise((res,rej)=>legacy.call(navigator,c,res,rej));
+  const err=new Error('insecure'); err.name='InsecureContext'; return Promise.reject(err);
+}
+function cameraError(e){
+  if(e?.name==='InsecureContext'||!window.isSecureContext)
+    return 'Your browser only asks for the camera on https pages. Open this file from GitHub Pages instead of from your downloads.';
+  if(e?.name==='NotAllowedError') return 'Camera blocked. Tap the lock or ⓘ icon by the address bar, set Camera to Allow, then tap Track my face.';
+  if(e?.name==='NotFoundError'||e?.name==='OverconstrainedError') return 'No front camera found on this device.';
+  if(e?.name==='NotReadableError') return 'The camera is in use by another app. Close it and try again.';
+  return 'Could not start the camera ('+(e?.name||'unknown error')+').';
+}
+async function startTracking(){
+  if(tracking) return;
+  setStatus('warn','Waiting for camera permission…');
+  try{
+    cam.srcObject=await getCamera(); await cam.play();
+  }catch(e){ setStatus('err',cameraError(e)); return; }
+  setStatus('warn','Loading face tracker…');
+  try{
+    const vision=await import(MP+'/vision_bundle.mjs');
+    const fs=await vision.FilesetResolver.forVisionTasks(MP+'/wasm');
+    const make=delegate=>vision.FaceDetector.createFromOptions(fs,{baseOptions:{modelAssetPath:MODEL,delegate},runningMode:'VIDEO',minDetectionConfidence:.5});
+    try{ detector=await make('GPU'); }catch(e){ detector=await make('CPU'); }
+  }catch(e){ setStatus('err','Could not load the face tracker. It needs internet the first time.'); return; }
+  tracking=true; trackState='search';
+  $('bTrack').textContent='Stop tracking'; $('bTrack').classList.remove('primary'); $('bTrack').classList.add('on');
+  try{ wakeLock=await navigator.wakeLock?.request('screen'); }catch(e){}
+}
+function stopTracking(){
+  tracking=false; face=null; trackState='off'; setStatus('','');
+  cam.srcObject?.getTracks().forEach(t=>t.stop()); cam.srcObject=null;
+  $('bTrack').textContent='Track my face'; $('bTrack').classList.add('primary'); $('bTrack').classList.remove('on');
+  try{ wakeLock?.release(); }catch(e){}
+}
+$('bTrack').onclick=()=> tracking?stopTracking():startTracking();
+
+let lastRaw=null;
+function detect(now){
+  if(!tracking||!detector||cam.readyState<2||cam.currentTime===lastCamT) return;
+  lastCamT=cam.currentTime;
+  let r; try{ r=detector.detectForVideo(cam,now); }catch(e){ return; }
+  const d=r?.detections?.[0];
+  if(!d||!d.keypoints||d.keypoints.length<2){ if(face&&now-face.time>700){ face=null; } trackState=face?'ok':'search'; return; }
+  const vw=cam.videoWidth, vh=cam.videoHeight, f=vw/(2*Math.tan(HFOV/2));
+  const k0=d.keypoints[0], k1=d.keypoints[1];
+  const eyePx=Math.hypot((k0.x-k1.x)*vw,(k0.y-k1.y)*vh); if(eyePx<4) return;
+  const zraw=IPD*f/eyePx, z=zraw*S.calK;
+  const cx=(k0.x+k1.x)/2, cy=(k0.y+k1.y)/2, sg=S.inv?-1:1;
+  const X=-(cx-.5)*vw*z/f*sg, Y=-(cy-.5)*vh*z/f*sg;
+  face={ax:Math.atan2(X,z), ay:Math.atan2(Y,z), z, time:now}; lastRaw={zraw}; trackState='ok';
+}
+$('bCal').onclick=()=>{ if(!face||!lastRaw){ flash('Start face tracking and face the camera first'); return; }
+  S.calK=300/lastRaw.zraw; save(); flash('Calibrated: you are 30 cm away'); };
+$('bCentre').onclick=()=>{ if(!face){ flash('Start face tracking and face the camera first'); return; }
+  S.ax0=face.ax; S.ay0=face.ay; S.refZ=face.z; save(); flash(`Centre set at ${Math.round(face.z/10)} cm`); };
+
+/* ---------- touch fallback & HUD ---------- */
+let ptr=null, touched=false, hudShown=true;
+canvas.addEventListener('pointerdown',e=>{ ptr={x0:e.clientX,y0:e.clientY,moved:false}; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove',e=>{
+  if(!ptr) return;
+  if(Math.hypot(e.clientX-ptr.x0,e.clientY-ptr.y0)>8) ptr.moved=true;
+  if(ptr.moved){ touched=true; ptr.ax=(e.clientX/innerWidth-.5)*.6; ptr.ay=-(e.clientY/innerHeight-.5)*.4; }
+});
+canvas.addEventListener('pointerup',()=>{ if(ptr&&!ptr.moved){ hudShown=!hudShown; $('hud').classList.toggle('faded',!hudShown); } ptr=null; });
+const openPanel=()=>{ $('panel').hidden=false; $('scrim').hidden=false; };
+const closePanel=()=>{ $('panel').hidden=true; $('scrim').hidden=true; };
+$('bPanel').onclick=openPanel;
+$('bClose').onclick=closePanel;
+$('scrim').addEventListener('pointerdown',e=>{ e.preventDefault(); closePanel(); });
+addEventListener('keydown',e=>{ if(e.key==='Escape') closePanel(); });
+$('bFs').onclick=async()=>{
+  try{ if(document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); }catch(e){}
+  try{ await screen.orientation.lock('landscape'); }catch(e){}
+};
+
+let flashUntil=0, flashMsg='';
+function flash(m){ flashMsg=m; flashUntil=performance.now()+2500; }
+let stLevel='', stText='';
+function setStatus(level,text){ stLevel=level; stText=text; }
+
+/* ---------- main loop ---------- */
+const cur={ax:0,ay:0,z:300};
+let lastNow=performance.now(), lastUi=0;
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt=Math.min(.1,(now-lastNow)/1000); lastNow=now;
+
+  const dpr=Math.min(devicePixelRatio||1,2), cw=Math.round(innerWidth*dpr), ch=Math.round(innerHeight*dpr);
+  if(canvas.width!==cw||canvas.height!==ch){ canvas.width=cw; canvas.height=ch; }
+
+  detect(now);
+  let tgt;
+  if(face) tgt={ax:face.ax-S.ax0, ay:face.ay-S.ay0, z:face.z};
+  else if(ptr&&ptr.moved) tgt={ax:ptr.ax, ay:ptr.ay, z:S.refZ};
+  else if(!touched&&!tracking) tgt={ax:.2*Math.sin(now/1500), ay:.07*Math.sin(now/2300), z:S.refZ};
+  else tgt={ax:0, ay:0, z:S.refZ};
+  const a=1-Math.exp(-dt/0.07);
+  cur.ax+=(tgt.ax-cur.ax)*a; cur.ay+=(tgt.ay-cur.ay)*a; cur.z+=(tgt.z-cur.z)*a;
+
+  // source upload
+  let el=null;
+  if(source==='demo'){ drawDemo(now); el=demo; }
+  else if(vid.readyState>=2){ el=vid; }
+  const asp=eyeAspect(); if(!T||Math.abs(asp-eyeAspectNow)>1e-3) setupTargets(asp);
+  if(el){
+    gl.bindTexture(gl.TEXTURE_2D,srcTex); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,el);
+  }
+
+  const oL=S.swap?.5:0, oR=S.swap?0:.5;
+  const dMax=S.disp/100, dMin=-dMax*.25;
+  const px=[1/T.w,1/T.h];
+
+  if(el){
+    drawTo(T.lum,P.lum,{srcT:srcTex},{oL,oR,q:[.25/T.w,.25/T.h]});
+    drawTo(T.raw,P.disp,{lumT:T.lum.tex,prevT:T.a.tex},{px,dMin,dMax,lambda:.25});
+    drawTo(T.b,P.smooth,{rawT:T.raw.tex,lumT:T.lum.tex,prevT:T.a.tex},{px,k:.35});
+    const tmp=T.a; T.a=T.b; T.b=tmp;
+  }
+
+  // viewpoint from head angle (closer = same sideways move gives a bigger angle)
+  const tView=.5+S.par*cur.ax*2.5;
+  const vy=S.vert*cur.ay*2.5;
+  const m=Math.pow(Math.max(80,cur.z)/S.refZ,S.zoom);
+  const r=(cw/ch)/asp; let sx,sy;
+  if(S.fit==='fill'){ [sx,sy]= r>1?[1,1/r]:[r,1]; sx/=1.12; sy/=1.12; }
+  else { [sx,sy]= r>1?[r,1]:[1,1/r]; }
+  sx/=m; sy/=m;
+  drawTo(null,P.out,{srcT:srcTex,dispT:T.a.tex},{oL,oR,t:tView,vy,d0n:S.focus,dMin,dMax,mode:S.mode,scale:[sx,sy]});
+
+  if(now-lastUi>150){ lastUi=now; updateUi(tView); }
+}
+function updateUi(tView){
+  let level, text;
+  if(now()<flashUntil){ level='ok'; text=flashMsg; }
+  else if(stLevel==='err'||stLevel==='warn'&&!tracking){ level=stLevel; text=stText; }
+  else if(tracking){ level=trackState==='ok'?'ok':'warn'; text=trackState==='ok'?'Tracking your face':'Looking for your face…'; }
+  else { level=''; text=source==='demo'?'Demo scene · drag to look around':'Drag to look around · or track your face'; }
+  $('led').className='led '+level; $('status').textContent=text;
+  $('rDist').textContent=face?Math.round(face.z/10)+' cm':'—';
+  $('rAng').textContent=Math.round(cur.ax*180/Math.PI)+'°';
+  $('rView').textContent=tView.toFixed(2);
+}
+const now=()=>performance.now();
+
+/* ---------- camera permission on open ---------- */
+const gate=$('gate');
+const closeGate=()=>{ gate.hidden=true; };
+$('gAllow').onclick=async()=>{
+  $('gAllow').disabled=true; $('gAllow').textContent='Waiting for your answer…';
+  await startTracking();
+  if(tracking) closeGate();
+  else { $('gateNote').textContent=stText; $('gAllow').disabled=false; $('gAllow').textContent='Try again'; }
+};
+$('gSkip').onclick=closeGate;
+(async()=>{
+  if(!window.isSecureContext){ $('gateNote').textContent=cameraError({name:'InsecureContext'}); return; }
+  try{
+    const p=await navigator.permissions?.query({name:'camera'});
+    if(p?.state==='granted'){ closeGate(); startTracking(); }       // already allowed earlier: skip the card
+    else if(p?.state==='denied') $('gateNote').textContent=cameraError({name:'NotAllowedError'});
+  }catch(e){}
+})();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
